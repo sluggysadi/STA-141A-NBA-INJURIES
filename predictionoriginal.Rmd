@@ -1,0 +1,1551 @@
+---
+title: "nba injury"
+output: pdf_document
+date: "2025-06-02"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)    # For data manipulation and visualization
+library(lubridate)    # For date handling
+library(plotly)       # For interactive plots
+library(corrplot)     # For correlation plots
+library(skimr)        # For data summary
+library(GGally)       # For pair plots
+library(scales)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(DT)
+```
+
+
+```{r cars}
+# NBA Comprehensive Injury Analysis - Complete EDA with Location Details
+# Updated: 2025-06-06
+# Author: ol0w0lo
+
+# --- SETUP AND LIBRARIES ---
+library(tidyverse)
+library(lubridate)
+library(skimr)
+library(corrplot)
+library(scales)
+library(ggrepel)
+library(tidytext)
+library(forcats)
+library(dplyr)
+library(gridExtra)
+```
+
+
+
+```{r}
+
+#bios <- read_csv("~/Downloads/nba_bios_2013-2023.csv")
+run <- read_csv("C:/Users/11578/Desktop/running distance nba.csv")
+bios <- read_csv("C:/Users/11578/Desktop/nba_bios_2013-2023.csv")
+all_injury <- read.csv("C:/Users/11578/Desktop/NBA Player Injury Stats(1951 - 2023).csv", stringsAsFactors = FALSE)
+# Basic dataset overview
+cat("=== NBA Player Bios Analysis ===\n")
+cat("Dataset shape:", nrow(bios), "rows x", ncol(bios), "columns\n")
+cat("Seasons covered:", paste(sort(unique(bios$SEASON)), collapse = ", "), "\n")
+cat("Number of unique players:", length(unique(bios$PLAYER_NAME)), "\n")
+
+# Clean the dataset remove columns not important
+bios <- bios %>% 
+  select(-TEAM_ID, -COLLEGE, -COUNTRY, 
+         -DRAFT_YEAR, -DRAFT_ROUND, -DRAFT_NUMBER, -PLAYER_HEIGHT)
+
+# Basic statistical summary
+cat("\n=== Statistical Summary ===\n")
+summary(bios)
+head(bios)
+
+```
+
+
+
+
+
+Teams often put players on IL without them getting injure because it gives the players more time to rest. so in the following code it will exclude the players on 
+
+```{r}
+# Load and clean injury data
+#all_injury <- read_csv("~/Downloads/NBA Player Injury Stats(1951 - 2023).csv")
+
+injury <- all_injury %>%
+  mutate(
+    Notes = as.character(Notes),
+    # Extract injury description after 'placed on IL with ...'
+    injury_type = ifelse(
+      str_detect(Notes, regex("placed on IL with ", ignore_case = TRUE)),
+      str_trim(str_remove(Notes, regex(".*placed on IL with ", ignore_case = TRUE))),
+      NA_character_
+    )
+  ) %>%
+  # Exclude: 
+  # - Notes say 'activated from IL'
+  # - or 'placed on IL' but NOT 'with ...'
+  filter(
+    !str_detect(Notes, regex("activated from IL", ignore_case = TRUE)),
+    !(str_detect(Notes, regex("placed on IL", ignore_case = TRUE)) &
+      !str_detect(Notes, regex("placed on IL with ", ignore_case = TRUE)))
+  ) %>%
+  # Keep only rows with a real injury description
+  filter(!is.na(injury_type)) %>%
+  # Remove the Notes column
+  select(-Notes) %>%
+  # Add cleaned player names and date processing
+  mutate(
+    PLAYER_NAME_CLEAN = str_trim(toupper(Relinquished)),
+    Date = as.Date(Date)
+  )
+
+# Extract season from date
+injury <- injury %>%
+  mutate(
+    Season_Year = year(Date),
+    SEASON = paste0(Season_Year, "-", str_sub(Season_Year + 1, -2))
+  )
+
+# Clean bios for merge
+bios <- bios %>%
+  mutate(PLAYER_NAME_CLEAN = str_trim(toupper(PLAYER_NAME)))
+
+# Add binary 'injured' flag per player-season
+injury_summary <- injury %>%
+  group_by(PLAYER_NAME_CLEAN, SEASON) %>%
+  summarise(
+    injured = TRUE,
+    most_common_injury = names(sort(table(injury_type), decreasing = TRUE))[1],
+    total_injuries = n(), # Number of times injured that season
+    .groups = "drop"
+  )
+
+# Merge injury info into bios
+bioinjury <- bios %>%
+  left_join(injury_summary, by = c("PLAYER_NAME_CLEAN", "SEASON")) %>%
+  mutate(
+    injured = ifelse(is.na(injured), FALSE, injured),
+    most_common_injury = ifelse(is.na(most_common_injury), "None", most_common_injury),
+    total_injuries = ifelse(is.na(total_injuries), 0, total_injuries)
+  ) %>%
+  select(-PLAYER_NAME_CLEAN)
+
+# View the injury filtering result
+cat("=== Injury Data After Filtering ===\n")
+cat("Total injury records:", nrow(injury), "\n")
+cat("Unique players with injuries:", length(unique(injury$PLAYER_NAME_CLEAN)), "\n")
+
+# Preview injury data
+injury %>% 
+  select(Date, Team, Relinquished, injury_type) %>% 
+  head(20)
+
+# Display final merged result
+cat("\n=== Final Merged Data ===\n")
+head(bioinjury)
+
+# Summary of injury status
+cat("\n=== Injury Summary ===\n")
+injury_status <- bioinjury %>%
+  summarise(
+    total_player_seasons = n(),
+    injured_player_seasons = sum(injured),
+    injury_rate = mean(injured) * 100
+  )
+
+cat("Total player-seasons:", injury_status$total_player_seasons, "\n")
+cat("Player-seasons with injuries:", injury_status$injured_player_seasons, "\n")
+cat("Injury rate:", round(injury_status$injury_rate, 2), "%\n")
+
+```
+
+
+
+
+
+```{r}
+#run <- read_csv("~/Downloads/running distance nba.csv")
+
+
+run <- run %>%
+  mutate(
+    PLAYER_NAME_CLEAN = str_trim(toupper(PLAYER_NAME)),
+    SEASON = as.numeric(substr(SEASON, 1, 4))  # Ensure SEASON is numeric
+  ) %>%
+  select(
+    PLAYER_NAME_CLEAN, 
+    SEASON,
+    PLAYER_ID,
+    TEAM_ABBREVIATION,
+    GP,
+    MIN,
+    DIST_MILES,
+    DIST_MILES_OFF,
+    DIST_MILES_DEF,
+    AVG_SPEED,
+    AVG_SPEED_OFF,
+    AVG_SPEED_DEF,
+    SEASON_TYPE
+  )
+
+# Ensure consistent formatting in bioinjury
+bioinjury <- bioinjury %>%
+  mutate(
+    PLAYER_NAME_CLEAN = str_trim(toupper(PLAYER_NAME)),
+    SEASON = as.numeric(substr(SEASON, 1, 4))  # Convert "2018-19" → 2018
+  )
+
+# Prepare injury_type_clean with SEASON as numeric
+injury_type_clean <- injury %>%
+  mutate(
+    PLAYER_NAME_CLEAN = str_trim(toupper(Relinquished)),
+    SEASON = as.numeric(year(as.Date(Date)))
+  ) %>%
+  select(PLAYER_NAME_CLEAN, SEASON, injury_type)
+
+# Merge bios + injury status + running data + injury type
+merged <- bioinjury %>%
+  left_join(
+    run, 
+    by = c("PLAYER_NAME_CLEAN", "SEASON"),
+    suffix = c("", "_run")
+  ) %>%
+  left_join(
+    injury_type_clean,
+    by = c("PLAYER_NAME_CLEAN", "SEASON")
+  ) %>%
+  select(
+    -PLAYER_NAME_CLEAN,
+    -PLAYER_ID_run,
+    -TEAM_ABBREVIATION_run,
+    -GP_run
+  )
+
+# Display results
+cat("=== Merge Complete ===\n")
+cat("Total rows:", nrow(merged), "\n")
+cat("Players with running data:", sum(!is.na(merged$GP)), "\n")
+
+# Preview merged data with injury type
+print(head(merged))
+
+# Filter injured players only
+injured_data <- merged %>% 
+  filter(injured == TRUE)
+
+# Preview injured data
+head(injured_data)
+```
+
+```{r}
+
+injurybyyear <- all_injury %>%
+  mutate(
+    Date = as.Date(Date),
+    PLAYER_NAME = str_trim(toupper(Relinquished)),
+  ) %>%
+  filter(
+    !is.na(PLAYER_NAME),
+    PLAYER_NAME != "",
+    grepl("IL|injury|placed on inactive|out|injured", Notes, ignore.case = TRUE),
+    !grepl("illness|stomach|health and safety protocols|COVID|virus|flu|sick|personal|family|bereavement|conditioning|rest|load management", Notes, ignore.case = TRUE)
+  ) %>%
+  select(Date, Team, PLAYER_NAME, Notes)
+
+# Extract year and create summary
+injury_trend_year <- injurybyyear %>%
+  mutate(
+    Year = year(Date)
+  ) %>%
+  group_by(Year) %>%
+  summarise(
+    total_injuries = n(),
+    unique_players = n_distinct(PLAYER_NAME),
+    .groups = "drop"
+  ) %>%
+  arrange(Year)
+
+injury_trend_year %>%
+  ggplot(aes(x = Year, y = total_injuries)) +
+  geom_line(color = "#1f77b4", size = 1.2) +
+  geom_point(color = "#ff7f0e", size = 3) +
+  geom_smooth(method = "loess", se = TRUE, alpha = 0.3, color = "#2ca02c") +
+  scale_x_continuous(breaks = seq(from = min(injury_trend_year$Year), 
+                                  to = max(injury_trend_year$Year), 
+                                  by = 5)) +
+  scale_y_continuous(labels = comma_format()) +
+  labs(
+    title = "NBA Injury Trend Over Time",
+    subtitle = "Total number of injury-related IL placements by year",
+    x = "Year",
+    y = "Total Injuries",
+    caption = paste("Data: NBA Injury Analysis")
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+
+```
+This plot shows the trend of injury in the NBA over the years. There are large variance in the beginning of 1950s and 2022-23. The variance in the early stages of NBA is likely due to the lack of tracking as shown in the graph. And the huge dip in the end of the curve is because this data set only captures till April of 2023, so there are injuries snot counted. An interesting feature shown in the plot shows a decrease in 2020, this was likely because due to COVID, and it cause less games to be played. In that season, the NBA officials reduce the number of game, and ended the season in October, as compared to mid-June normally after playoff. The season after the lock down the injury shown a large increase because there's less time for the players to rest before the new season. 
+
+```{r}
+cat("=== Checking Column Names ===\n")
+print(colnames(merged))
+cat("\n")
+
+# Let's also check the structure
+str(merged)
+
+```
+
+
+
+```{r}
+# NBA Injury Analysis - Unsupervised Machine Learning Models
+# Updated for actual data structure
+# Author: ol0w0lo
+# Date: 2025-06-10
+
+# Load additional libraries for unsupervised learning
+library(cluster)        # For clustering algorithms
+library(factoextra)     # For cluster visualization
+library(NbClust)        # For optimal cluster number determination
+library(pheatmap)       # For heatmaps
+library(VIM)            # For missing value visualization
+library(mice)           # For missing value imputation
+library(umap)           # For UMAP dimensionality reduction
+library(dbscan)         # For DBSCAN clustering
+library(kohonen)        # For Self-Organizing Maps
+library(corrplot)       # For correlation analysis
+library(plotly)         # For interactive plots
+library(gridExtra)      # For arranging plots
+
+# === DATA PREPARATION ===
+cat("=== Starting Unsupervised ML Analysis ===\n")
+cat("Original data shape:", nrow(merged), "x", ncol(merged), "\n")
+
+# Clean and prepare data for unsupervised learning
+ml_data <- merged %>%
+  # Remove rows with missing key variables
+  filter(!is.na(PLAYER_NAME), !is.na(SEASON), !is.na(AGE)) %>%
+  # Select relevant variables for analysis
+  select(
+    PLAYER_NAME, SEASON, injured, total_injuries, most_common_injury,
+    AGE, PLAYER_HEIGHT_INCHES, PLAYER_WEIGHT, 
+    GP, PTS, REB, AST, MIN,
+    NET_RATING, OREB_PCT, DREB_PCT, USG_PCT, TS_PCT, AST_PCT,
+    DIST_MILES, DIST_MILES_OFF, DIST_MILES_DEF,
+    AVG_SPEED, AVG_SPEED_OFF, AVG_SPEED_DEF
+  ) %>%
+  # Remove rows with too many missing values in key performance metrics
+  filter(
+    !is.na(GP), !is.na(MIN), 
+    !is.na(DIST_MILES) | !is.na(PTS)  # At least one performance metric
+  )
+
+cat("Cleaned data shape:", nrow(ml_data), "x", ncol(ml_data), "\n")
+
+# === FEATURE ENGINEERING ===
+cat("\n=== Feature Engineering ===\n")
+
+# Create additional meaningful features
+ml_features <- ml_data %>%
+  mutate(
+    # Injury risk categories
+    injury_risk = case_when(
+      total_injuries == 0 ~ "No_Injury",
+      total_injuries == 1 ~ "Low_Risk",
+      total_injuries <= 3 ~ "Medium_Risk",
+      TRUE ~ "High_Risk"
+    ),
+    
+    # Age categories
+    age_group = case_when(
+      AGE < 23 ~ "Young",
+      AGE < 27 ~ "Prime",
+      AGE < 31 ~ "Veteran",
+      TRUE ~ "Old"
+    ),
+    
+    # BMI calculation
+    BMI = (PLAYER_WEIGHT * 703) / (PLAYER_HEIGHT_INCHES^2),
+    
+    # Performance efficiency metrics
+    minutes_per_game = ifelse(GP > 0, MIN / GP, 0),
+    points_per_minute = ifelse(MIN > 0, PTS / MIN, 0),
+    rebounds_per_minute = ifelse(MIN > 0, REB / MIN, 0),
+    assists_per_minute = ifelse(MIN > 0, AST / MIN, 0),
+    
+    # Movement efficiency (only if movement data available)
+    distance_per_minute = ifelse(!is.na(DIST_MILES) & MIN > 0, DIST_MILES / MIN, NA),
+    off_def_speed_ratio = ifelse(!is.na(AVG_SPEED_OFF) & !is.na(AVG_SPEED_DEF) & AVG_SPEED_DEF > 0, 
+                                 AVG_SPEED_OFF / AVG_SPEED_DEF, NA),
+    off_def_distance_ratio = ifelse(!is.na(DIST_MILES_OFF) & !is.na(DIST_MILES_DEF) & DIST_MILES_DEF > 0,
+                                    DIST_MILES_OFF / DIST_MILES_DEF, NA),
+    
+    # Playing style indicators
+    usage_efficiency = ifelse(USG_PCT > 0, TS_PCT / USG_PCT, NA),
+    rebounding_rate = OREB_PCT + DREB_PCT,
+    
+    # Season experience (proxy)
+    season_numeric = as.numeric(SEASON)
+  ) %>%
+  # Remove infinite values
+  mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .)))
+
+# Select numeric features for clustering (focusing on available data)
+numeric_cols <- ml_features %>%
+  select(
+    AGE, PLAYER_HEIGHT_INCHES, PLAYER_WEIGHT, BMI,
+    GP, minutes_per_game, PTS, REB, AST,
+    points_per_minute, rebounds_per_minute, assists_per_minute,
+    NET_RATING, OREB_PCT, DREB_PCT, USG_PCT, TS_PCT, AST_PCT,
+    rebounding_rate, total_injuries
+  ) %>%
+  # Add movement data if available
+  {if("DIST_MILES" %in% names(ml_features) && sum(!is.na(ml_features$DIST_MILES)) > 100) {
+    bind_cols(., select(ml_features, DIST_MILES, AVG_SPEED))
+  } else .} %>%
+  # Keep only complete cases for initial analysis
+  drop_na()
+
+# Get corresponding complete cases from ml_features
+complete_indices <- which(complete.cases(
+  ml_features[, names(numeric_cols)]
+))
+ml_complete <- ml_features[complete_indices, ]
+numeric_features <- as.matrix(numeric_cols)
+
+cat("Features selected for analysis:", ncol(numeric_features), "\n")
+cat("Complete cases for analysis:", nrow(numeric_features), "\n")
+cat("Feature names:", paste(colnames(numeric_features), collapse = ", "), "\n")
+
+# Scale the features
+scaled_features <- scale(numeric_features)
+
+# === 1. EXPLORATORY DATA ANALYSIS ===
+cat("\n=== Exploratory Data Analysis ===\n")
+
+# Injury distribution
+injury_dist <- table(ml_complete$injury_risk)
+cat("Injury risk distribution:\n")
+print(injury_dist)
+
+# Age vs Injury relationship
+age_injury_plot <- ggplot(ml_complete, aes(x = age_group, fill = injury_risk)) +
+  geom_bar(position = "fill") +
+  scale_fill_viridis_d() +
+  labs(title = "Injury Risk by Age Group", 
+       x = "Age Group", y = "Proportion", fill = "Injury Risk") +
+  theme_minimal()
+print(age_injury_plot)
+
+# === 2. PRINCIPAL COMPONENT ANALYSIS (PCA) ===
+cat("\n=== Principal Component Analysis ===\n")
+
+# Perform PCA
+pca_result <- prcomp(scaled_features, center = FALSE, scale. = FALSE)
+
+# PCA summary
+pca_summary <- summary(pca_result)
+cat("PCA Variance Explained:\n")
+print(pca_summary$importance[1:3, 1:min(10, ncol(pca_summary$importance))])
+
+pca_3d_data <- data.frame(
+  PC1 = pca_result$x[,1],
+  PC2 = pca_result$x[,2], 
+  PC3 = pca_result$x[,3],
+  injury_risk = ml_complete$injury_risk,
+  player_name = ml_complete$PLAYER_NAME
+)
+
+pca_3d_plot <- plot_ly(pca_3d_data, 
+                       x = ~PC1, y = ~PC2, z = ~PC3,
+                       color = ~injury_risk,
+                       colors = viridis::viridis(4),
+                       text = ~player_name,
+                       type = "scatter3d", 
+                       mode = "markers") %>%
+  layout(title = "3D PCA - NBA Players by Injury Risk",
+         scene = list(xaxis = list(title = paste("PC1 (", round(pca_summary$importance[2,1]*100, 1), "%)")),
+                     yaxis = list(title = paste("PC2 (", round(pca_summary$importance[2,2]*100, 1), "%)")),
+                     zaxis = list(title = paste("PC3 (", round(pca_summary$importance[2,3]*100, 1), "%)"))))
+
+pca_3d_plot
+
+# Multiple 2D projections
+pc_combinations <- list(
+  c(1,2), c(1,3), c(1,4), c(2,3), c(2,4), c(3,4)
+)
+
+create_pca_plot <- function(pc_pair, data, pca_summary) {
+  pc_data <- data.frame(
+    PC_X = pca_result$x[,pc_pair[1]],
+    PC_Y = pca_result$x[,pc_pair[2]],
+    injury_risk = ml_complete$injury_risk
+  )
+  
+  var_x <- round(pca_summary$importance[2,pc_pair[1]]*100, 1)
+  var_y <- round(pca_summary$importance[2,pc_pair[2]]*100, 1)
+  
+  ggplot(pc_data, aes(x = PC_X, y = PC_Y, color = injury_risk)) +
+    geom_point(alpha = 0.6, size = 1.5) +
+    scale_color_viridis_d() +
+    labs(title = paste("PC", pc_pair[1], "vs PC", pc_pair[2]),
+         x = paste("PC", pc_pair[1], "(", var_x, "%)"),
+         y = paste("PC", pc_pair[2], "(", var_y, "%)"),
+         color = "Injury Risk") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Create multiple PC plots
+pc_plots <- map(pc_combinations[1:4], ~create_pca_plot(.x, pca_result, pca_summary))
+grid.arrange(grobs = pc_plots, ncol = 2)
+
+# PCA Variables plot
+pca_var_plot <- fviz_pca_var(pca_result,
+                             col.var = "contrib",
+                             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+                             title = "PCA - Variable Contributions") +
+  theme_minimal()
+print(pca_var_plot)
+
+# Scree plot
+scree_plot <- fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50)) +
+  labs(title = "PCA Scree Plot - Variance Explained") +
+  theme_minimal()
+print(scree_plot)
+
+```
+Injury risk by age group:
+We categorized players into 4 categories according to age:Young, Veteran, Prime and old; We categorize the risk by High-risk, Low-risk, Medium-risk and No-injury.Here is what we find out:
+Old: Shows the highest proportion of High Risk (purple) players, with the lowest No Injury cases
+Young: shows the largest proportion of No injuries and the smallest of high risk. This is quite obvious that the chances of getting injured increases as a player plays more games or ages and etc.
+
+PCA Variable Contributions
+This shows who the variables contributes to the principal components. We only used PC1 and 2 for easier visualization. And these are some variables that contributes the most
+
+PTS (Points) 
+rebounding_rate AST (Assists) 
+REB (Rebounds)
+PLAYER_WEIGHT DIST_MILES(distance running on court) 
+PLAYER_HEIGHT_INCHES
+DREB_PCT(percentage of getting defensive rebound)
+OREB_PCT(percentage of getting defensive rebound)
+AST_PCT(assist percentage)
+USG_PCT(usage percentage)
+
+PC Spree
+
+
+```{r}
+# === 3. OPTIMAL NUMBER OF CLUSTERS ===
+cat("\n=== Determining Optimal Number of Clusters ===\n")
+
+set.seed(123)
+
+# Elbow method
+elbow_plot <- fviz_nbclust(scaled_features, kmeans, method = "wss", k.max = 10) +
+  labs(title = "Elbow Method for Optimal k") +
+  theme_minimal()
+print(elbow_plot)
+
+# Silhouette method
+silhouette_plot <- fviz_nbclust(scaled_features, kmeans, method = "silhouette", k.max = 10) +
+  labs(title = "Silhouette Method for Optimal k") +
+  theme_minimal()
+print(silhouette_plot)
+
+# Gap statistic (on sample due to computational cost)
+set.seed(123)
+if(nrow(scaled_features) > 1000) {
+  sample_idx <- sample(nrow(scaled_features), 1000)
+  gap_stat <- clusGap(scaled_features[sample_idx,], FUN = kmeans, K.max = 10, B = 20)
+} else {
+  gap_stat <- clusGap(scaled_features, FUN = kmeans, K.max = 10, B = 20)
+}
+
+gap_plot <- fviz_gap_stat(gap_stat) +
+  labs(title = "Gap Statistic for Optimal k") +
+  theme_minimal()
+print(gap_plot)
+
+# Choose optimal 
+optimal_k <- 3 # after testing other options
+cat("Using k =", optimal_k, "clusters\n")
+
+# === 4. K-MEANS CLUSTERING ===
+cat("\n=== K-Means Clustering ===\n")
+
+set.seed(123)
+kmeans_result <- kmeans(scaled_features, centers = optimal_k, nstart = 25, iter.max = 100)
+
+# Add cluster assignments
+ml_complete$kmeans_cluster <- as.factor(kmeans_result$cluster)
+
+# Visualize K-means clusters
+kmeans_plot <- fviz_cluster(kmeans_result, data = scaled_features,
+                            palette = "jco",
+                            geom = "point",
+                            ellipse.type = "convex",
+                            ggtheme = theme_minimal()) +
+  labs(title = "K-Means Clustering of NBA Players")
+print(kmeans_plot)
+
+# Cluster analysis
+cluster_summary <- ml_complete %>%
+  group_by(kmeans_cluster) %>%
+  summarise(
+    n_players = n(),
+    injury_rate_pct = round(mean(injured) * 100, 1),
+    avg_age = round(mean(AGE), 1),
+    avg_weight = round(mean(PLAYER_WEIGHT), 1),
+    avg_height = round(mean(PLAYER_HEIGHT_INCHES), 1),
+    avg_games = round(mean(GP), 1),
+    avg_minutes = round(mean(minutes_per_game), 1),
+    avg_points = round(mean(PTS), 1),
+    avg_rebounds = round(mean(REB), 1),
+    avg_assists = round(mean(AST), 1),
+    avg_total_injuries = round(mean(total_injuries), 2),
+    high_risk_pct = round(mean(injury_risk == "High_Risk") * 100, 1),
+    .groups = "drop"
+  )
+
+cat("=== K-Means Cluster Profiles ===\n")
+print(cluster_summary)
+
+# === 5. HIERARCHICAL CLUSTERING ===
+cat("\n=== Hierarchical Clustering ===\n")
+
+# Use sample for computational efficiency
+set.seed(123)
+hc_sample_size <- min(500, nrow(scaled_features))
+hc_sample_idx <- sample(nrow(scaled_features), hc_sample_size)
+hc_sample_data <- scaled_features[hc_sample_idx, ]
+hc_sample_ml <- ml_complete[hc_sample_idx, ]
+
+# Distance matrix and hierarchical clustering
+dist_matrix <- dist(hc_sample_data, method = "euclidean")
+hc_result <- hclust(dist_matrix, method = "ward.D2")
+
+# Dendrogram
+dendro_plot <- fviz_dend(hc_result, k = optimal_k, 
+                         color_labels_by_k = TRUE, rect = TRUE,
+                         rect_fill = TRUE, rect_border = "jco",
+                         labels_track_height = 0.1) +
+  labs(title = paste("Hierarchical Clustering Dendrogram (n =", hc_sample_size, ")"))
+print(dendro_plot)
+
+# Cut tree and visualize
+hc_clusters <- cutree(hc_result, k = optimal_k)
+hc_sample_ml$hc_cluster <- as.factor(hc_clusters)
+
+hc_cluster_plot <- fviz_cluster(list(data = hc_sample_data, cluster = hc_clusters),
+                                palette = "jco",
+                                geom = "point",
+                                ellipse.type = "convex",
+                                ggtheme = theme_minimal()) +
+  labs(title = "Hierarchical Clustering Visualization")
+print(hc_cluster_plot)
+
+# === 6. DBSCAN CLUSTERING ===
+cat("\n=== DBSCAN Clustering ===\n")
+
+# kNN distance plot to determine eps
+knn_plot <- dbscan::kNNdistplot(scaled_features, k = 4)
+abline(h = 2.5, lty = 2, col = "red")
+
+# Perform DBSCAN
+set.seed(123)
+dbscan_result <- dbscan::dbscan(scaled_features, eps = 2.5, minPts = 5)
+
+ml_complete$dbscan_cluster <- as.factor(dbscan_result$cluster)
+
+cat("DBSCAN Results:\n")
+cat("Number of clusters:", max(dbscan_result$cluster), "\n")
+cat("Number of noise points:", sum(dbscan_result$cluster == 0), "\n")
+cat("Cluster sizes:", table(dbscan_result$cluster), "\n")
+
+# Visualize DBSCAN
+dbscan_plot <- fviz_cluster(dbscan_result, data = scaled_features,
+                            palette = "jco",
+                            geom = "point",
+                            ellipse = FALSE,
+                            ggtheme = theme_minimal()) +
+  labs(title = "DBSCAN Clustering Results")
+print(dbscan_plot)
+
+# === 7. UMAP DIMENSIONALITY REDUCTION ===
+cat("\n=== UMAP Analysis ===\n")
+
+set.seed(123)
+umap_result <- umap(scaled_features, n_neighbors = 15, min_dist = 0.1)
+
+# Create UMAP data frame
+umap_df <- data.frame(
+  UMAP1 = umap_result$layout[,1],
+  UMAP2 = umap_result$layout[,2],
+  injury_risk = ml_complete$injury_risk,
+  age_group = ml_complete$age_group,
+  kmeans_cluster = ml_complete$kmeans_cluster,
+  injured = ml_complete$injured
+)
+
+# UMAP visualization by injury risk
+umap_injury_plot <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = injury_risk)) +
+  geom_point(alpha = 0.7, size = 1.5) +
+  scale_color_viridis_d() +
+  labs(title = "UMAP - NBA Players by Injury Risk",
+       x = "UMAP 1", y = "UMAP 2", color = "Injury Risk") +
+  theme_minimal()
+print(umap_injury_plot)
+
+# UMAP by age group
+umap_age_plot <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = age_group)) +
+  geom_point(alpha = 0.7, size = 1.5) +
+  scale_color_brewer(type = "qual", palette = "Set1") +
+  labs(title = "UMAP - NBA Players by Age Group",
+       x = "UMAP 1", y = "UMAP 2", color = "Age Group") +
+  theme_minimal()
+print(umap_age_plot)
+
+# UMAP by clusters
+umap_cluster_plot <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = kmeans_cluster)) +
+  geom_point(alpha = 0.7, size = 1.5) +
+  scale_color_brewer(type = "qual", palette = "Set1") +
+  labs(title = "UMAP - NBA Players by K-Means Cluster",
+       x = "UMAP 1", y = "UMAP 2", color = "Cluster") +
+  theme_minimal()
+print(umap_cluster_plot)
+
+# === 8. CORRELATION ANALYSIS ===
+cat("\n=== Correlation Analysis ===\n")
+
+# Calculate correlation matrix
+cor_matrix <- cor(numeric_features, use = "complete.obs")
+
+# Correlation plot
+corrplot(cor_matrix, method = "color", type = "upper", 
+         order = "hclust", tl.cex = 0.7, tl.col = "black",
+         title = "Feature Correlation Matrix")
+
+# Detailed heatmap
+pheatmap(cor_matrix,
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         main = "Feature Correlation Heatmap",
+         fontsize = 8)
+
+# === 9. ANOMALY DETECTION ===
+cat("\n=== Anomaly Detection ===\n")
+
+# Local Outlier Factor
+lof_scores <- lof(scaled_features, minPts = 5)
+ml_complete$lof_score <- lof_scores
+ml_complete$is_outlier <- lof_scores > quantile(lof_scores, 0.95)
+
+cat("Outliers detected:", sum(ml_complete$is_outlier), "\n")
+cat("Outlier rate:", round(mean(ml_complete$is_outlier) * 100, 2), "%\n")
+
+# Visualize outliers
+outlier_plot1 <- ggplot(ml_complete, aes(x = PTS, y = total_injuries, color = is_outlier)) +
+  geom_point(alpha = 0.7) +
+  scale_color_manual(values = c("FALSE" = "blue", "TRUE" = "red")) +
+  labs(title = "Outlier Detection - Points vs Injuries",
+       x = "Points per Game", y = "Total Injuries", color = "Outlier") +
+  theme_minimal()
+print(outlier_plot1)
+
+outlier_plot2 <- ggplot(ml_complete, aes(x = AGE, y = minutes_per_game, color = is_outlier)) +
+  geom_point(alpha = 0.7) +
+  scale_color_manual(values = c("FALSE" = "blue", "TRUE" = "red")) +
+  labs(title = "Outlier Detection - Age vs Minutes per Game",
+       x = "Age", y = "Minutes per Game", color = "Outlier") +
+  theme_minimal()
+print(outlier_plot2)
+
+# Top outliers
+top_outliers <- ml_complete %>%
+  filter(is_outlier) %>%
+  select(PLAYER_NAME, SEASON, AGE, PTS, REB, AST, total_injuries, injury_risk, lof_score) %>%
+  arrange(desc(lof_score)) %>%
+  head(10)
+
+cat("=== Top 10 Outliers ===\n")
+print(top_outliers)
+
+# === 10. CLUSTER VALIDATION ===
+cat("\n=== Cluster Validation ===\n")
+
+# Silhouette analysis for K-means
+sil_analysis <- silhouette(kmeans_result$cluster, dist(scaled_features))
+avg_sil_width <- mean(sil_analysis[,3])
+
+cat("Average silhouette width:", round(avg_sil_width, 3), "\n")
+
+# Silhouette plot
+sil_plot <- fviz_silhouette(sil_analysis) +
+  labs(title = "Silhouette Analysis for K-Means Clustering")
+print(sil_plot)
+
+# Within-cluster sum of squares
+cat("Within-cluster sum of squares by cluster:\n")
+print(kmeans_result$withinss)
+cat("Total within-cluster sum of squares:", kmeans_result$tot.withinss, "\n")
+cat("Between-cluster sum of squares:", kmeans_result$betweenss, "\n")
+
+# === 11. DETAILED CLUSTER ANALYSIS ===
+cat("\n=== Detailed Cluster Analysis ===\n")
+
+# Box plots for key variables by cluster
+create_cluster_boxplot <- function(var, var_name) {
+  ggplot(ml_complete, aes_string(x = "kmeans_cluster", y = var, fill = "kmeans_cluster")) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+    labs(title = paste(var_name, "by Cluster"), 
+         x = "Cluster", y = var_name, fill = "Cluster") +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Create multiple box plots
+p1 <- create_cluster_boxplot("total_injuries", "Total Injuries")
+p2 <- create_cluster_boxplot("AGE", "Age")
+p3 <- create_cluster_boxplot("PTS", "Points per Game")
+p4 <- create_cluster_boxplot("minutes_per_game", "Minutes per Game")
+
+# Arrange plots
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+# === 12. INJURY PREDICTION INSIGHTS ===
+cat("\n=== Injury Prediction Insights ===\n")
+
+# Feature importance based on cluster centers
+feature_importance <- abs(kmeans_result$centers)
+rownames(feature_importance) <- paste("Cluster", 1:optimal_k)
+
+# Create feature importance heatmap
+pheatmap(feature_importance,
+         scale = "column",
+         main = "Feature Importance by Cluster",
+         cluster_cols = FALSE,
+         fontsize = 8)
+
+# Cluster-specific injury analysis
+injury_by_cluster <- ml_complete %>%
+  group_by(kmeans_cluster, injury_risk) %>%
+  count() %>%
+  group_by(kmeans_cluster) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+injury_cluster_plot <- ggplot(injury_by_cluster, aes(x = kmeans_cluster, y = prop, fill = injury_risk)) +
+  geom_bar(stat = "identity") +
+  scale_fill_viridis_d() +
+  labs(title = "Injury Risk Distribution by Cluster",
+       x = "Cluster", y = "Proportion", fill = "Injury Risk") +
+  theme_minimal()
+print(injury_cluster_plot)
+
+# === 13. SAVE RESULTS ===
+cat("\n=== Saving Results ===\n")
+
+# Prepare final results dataset
+final_results <- ml_complete %>%
+  select(
+    PLAYER_NAME, SEASON, AGE, PLAYER_WEIGHT, PLAYER_HEIGHT_INCHES,
+    GP, PTS, REB, AST, total_injuries, injured, injury_risk,
+    kmeans_cluster, dbscan_cluster, lof_score, is_outlier
+  )
+
+# Save results
+#write.csv(final_results, "nba_unsupervised_ml_results.csv", row.names = FALSE)
+#write.csv(cluster_summary, "nba_cluster_profiles.csv", row.names = FALSE)
+
+# Save model objects for future use
+#save(kmeans_result, pca_result, umap_result, scaled_features, 
+     #file = "nba_ml_models.RData")
+
+cat("Analysis complete!\n")
+
+
+# === 14. SUMMARY INSIGHTS ===
+cat("\n=== KEY INSIGHTS SUMMARY ===\n")
+cat("1. Identified", optimal_k, "distinct player clusters\n")
+cat("2. Overall injury rate:", round(mean(ml_complete$injured) * 100, 1), "%\n")
+cat("3. Average silhouette width:", round(avg_sil_width, 3), "(good clustering if > 0.5)\n")
+cat("4. Outliers detected:", sum(ml_complete$is_outlier), "players\n")
+cat("5. PCA explains", round(sum(pca_summary$importance[2,1:3]) * 100, 1), "% variance in first 3 components\n")
+
+# Cluster insights
+for(i in 1:optimal_k) {
+  cluster_data <- cluster_summary[cluster_summary$kmeans_cluster == i, ]
+  cat(sprintf("   Cluster %d: %d players, %.1f%% injury rate, avg age %.1f\n", 
+              i, cluster_data$n_players, cluster_data$injury_rate_pct, cluster_data$avg_age))
+}
+
+cat("\nAnalysis provides insights for injury prevention and player management strategies.\n")
+``` 
+Elbow method silhouette method gap statistic
+we use these three plots to find the most optimal k for k-means
+
+elbow method
+Y-axis is the Total Within Sum of Square. This represents the sum of squared distances between each data point and the centroid of its assigned cluster.
+The x-axis is the number of clusters.
+It shows that the 
+
+Silhouette Method for Optimal k
+
+
+
+
+```{r}
+
+# Models: Logistic Regression, XGBoost, Random Forest
+
+
+# Load required libraries
+library(tidyverse)
+library(caret)           # For model training and evaluation
+library(xgboost)         # For XGBoost
+library(randomForest)    # For Random Forest
+library(glmnet)          # For regularized logistic regression
+library(pROC)            # For ROC curves
+library(VIM)             # For missing value analysis
+library(corrplot)        # For correlation plots
+library(ROSE)            # For handling class imbalance
+library(MLmetrics)       # For additional metrics
+library(plotly)          # For interactive plots
+library(lime)            # For model interpretability
+library(DALEX)           # For model explanation
+library(gridExtra)       # For plot arrangements
+library(e1071)           # For SVM (optional)
+library(ROCR)            # For performance evaluation
+```
+```{r}
+# === DATA PREPARATION FOR SUPERVISED LEARNING ===
+
+# Prepare the dataset
+supervised_data <- merged %>%
+  # Keep only rows with essential data
+  filter(!is.na(PLAYER_NAME), !is.na(SEASON), !is.na(AGE)) %>%
+  # Create target variable (binary injury indicator)
+  mutate(
+    # Target variable: injured this season (1 = injured, 0 = not injured)
+    injury_target = as.factor(ifelse(injured == TRUE, "Injured", "Not_Injured")),
+    
+    # Feature engineering
+    age_squared = AGE^2,
+    weight_height_ratio = PLAYER_WEIGHT / PLAYER_HEIGHT_INCHES,
+    BMI = (PLAYER_WEIGHT * 703) / (PLAYER_HEIGHT_INCHES^2),
+    
+    # Performance metrics per game
+    minutes_per_game = ifelse(GP > 0, MIN / GP, 0),
+    points_per_game = ifelse(GP > 0, PTS / GP, 0),
+    rebounds_per_game = ifelse(GP > 0, REB / GP, 0),
+    assists_per_game = ifelse(GP > 0, AST / GP, 0),
+    
+    # Efficiency metrics
+    points_per_minute = ifelse(MIN > 0, PTS / MIN, 0),
+    usage_efficiency = ifelse(!is.na(USG_PCT) & USG_PCT > 0, TS_PCT / USG_PCT, NA),
+    rebounding_total = OREB_PCT + DREB_PCT,
+    
+    # Movement efficiency (if available)
+    distance_per_minute = ifelse(!is.na(DIST_MILES) & MIN > 0, DIST_MILES / MIN, NA),
+    speed_consistency = ifelse(!is.na(AVG_SPEED_OFF) & !is.na(AVG_SPEED_DEF), 
+                              abs(AVG_SPEED_OFF - AVG_SPEED_DEF), NA),
+    
+    # Historical context
+    season_numeric = as.numeric(SEASON),
+    career_stage = case_when(
+      AGE < 23 ~ "Rookie_Sophomore",
+      AGE < 27 ~ "Prime_Early",
+      AGE < 31 ~ "Prime_Late", 
+      TRUE ~ "Veteran"
+    ),
+    
+    # Position proxy (based on height and weight)
+    position_proxy = case_when(
+      PLAYER_HEIGHT_INCHES < 75 ~ "Guard",
+      PLAYER_HEIGHT_INCHES < 79 ~ "Forward",
+      TRUE ~ "Center"
+    )
+  ) %>%
+  # Remove infinite values
+  mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .)))
+
+# Select features for modeling
+feature_columns <- c(
+  "AGE", "age_squared", "PLAYER_WEIGHT", "PLAYER_HEIGHT_INCHES", 
+  "BMI", "weight_height_ratio",
+  "GP", "minutes_per_game", "points_per_game", "rebounds_per_game", "assists_per_game",
+  "points_per_minute", "PTS", "REB", "AST",
+  "NET_RATING", "OREB_PCT", "DREB_PCT", "USG_PCT", "TS_PCT", "AST_PCT",
+  "rebounding_total", "season_numeric"
+)
+
+# Add movement features if available
+if(sum(!is.na(supervised_data$DIST_MILES)) > 100) {
+  movement_features <- c("DIST_MILES", "AVG_SPEED", "distance_per_minute")
+  available_movement <- movement_features[movement_features %in% names(supervised_data)]
+  feature_columns <- c(feature_columns, available_movement)
+  cat("Added movement features:", paste(available_movement, collapse = ", "), "\n")
+}
+
+# Create modeling dataset
+modeling_data <- supervised_data %>%
+  select(all_of(c("PLAYER_NAME", "SEASON", "injury_target", "career_stage", "position_proxy", feature_columns))) %>%
+  # Handle missing values
+  filter(complete.cases(.[feature_columns]))
+
+cat("=== Data Summary ===\n")
+cat("Total observations:", nrow(modeling_data), "\n")
+cat("Features for modeling:", length(feature_columns), "\n")
+cat("Class distribution:\n")
+print(table(modeling_data$injury_target))
+cat("Injury rate:", round(mean(modeling_data$injury_target == "Injured") * 100, 2), "%\n")
+
+# === FEATURE ANALYSIS ===
+cat("\n=== Feature Analysis ===\n")
+
+# Correlation analysis
+numeric_features <- modeling_data[feature_columns]
+cor_matrix <- cor(numeric_features, use = "complete.obs")
+
+# Plot correlation matrix
+corrplot(cor_matrix, method = "color", type = "upper", order = "hclust", 
+         tl.cex = 0.7, tl.col = "black", title = "Feature Correlation Matrix")
+
+# Feature importance via univariate analysis
+univariate_analysis <- numeric_features %>%
+  bind_cols(injury = modeling_data$injury_target) %>%
+  pivot_longer(-injury, names_to = "feature", values_to = "value") %>%
+  group_by(feature) %>%
+  summarise(
+    t_test_p = t.test(value ~ injury)$p.value,
+    effect_size = abs(mean(value[injury == "Injured"]) - mean(value[injury == "Not_Injured"])) / sd(value),
+    .groups = "drop"
+  ) %>%
+  arrange(t_test_p)
+
+cat("Top 10 features by univariate significance:\n")
+print(head(univariate_analysis, 10))
+
+# === DATA SPLITTING ===
+cat("\n=== Data Splitting ===\n")
+
+set.seed(123)
+
+# Create training and testing sets (70-30 split)
+train_index <- createDataPartition(modeling_data$injury_target, p = 0.7, list = FALSE)
+train_data <- modeling_data[train_index, ]
+test_data <- modeling_data[-train_index, ]
+
+cat("Training set size:", nrow(train_data), "\n")
+cat("Test set size:", nrow(test_data), "\n")
+cat("Training set injury rate:", round(mean(train_data$injury_target == "Injured") * 100, 2), "%\n")
+cat("Test set injury rate:", round(mean(test_data$injury_target == "Injured") * 100, 2), "%\n")
+
+# Prepare feature matrices
+X_train <- as.matrix(train_data[feature_columns])
+y_train <- train_data$injury_target
+X_test <- as.matrix(test_data[feature_columns])
+y_test <- test_data$injury_target
+
+# === HANDLING CLASS IMBALANCE ===
+cat("\n=== Handling Class Imbalance ===\n")
+
+# Check class imbalance
+class_counts <- table(y_train)
+imbalance_ratio <- min(class_counts) / max(class_counts)
+cat("Class imbalance ratio:", round(imbalance_ratio, 3), "\n")
+
+# Apply SMOTE for balancing (if severely imbalanced)
+if(imbalance_ratio < 0.3) {
+  cat("Applying SMOTE to balance classes...\n")
+  
+  # Prepare data for SMOTE
+  smote_data <- train_data[c(feature_columns, "injury_target")]
+  
+  # Apply SMOTE
+  balanced_data <- ROSE(injury_target ~ ., data = smote_data, seed = 123)$data
+  
+  cat("Balanced dataset size:", nrow(balanced_data), "\n")
+  cat("Balanced class distribution:\n")
+  print(table(balanced_data$injury_target))
+  
+  # Update training data
+  X_train_balanced <- as.matrix(balanced_data[feature_columns])
+  y_train_balanced <- balanced_data$injury_target
+} else {
+  X_train_balanced <- X_train
+  y_train_balanced <- y_train
+}
+
+# === MODEL 1: LOGISTIC REGRESSION ===
+cat("\n=== Training Logistic Regression ===\n")
+
+# Train logistic regression with regularization
+set.seed(123)
+
+# Prepare data for glmnet (requires numeric target)
+y_train_numeric <- as.numeric(y_train_balanced == "Injured")
+y_test_numeric <- as.numeric(y_test == "Injured")
+
+# Cross-validation for lambda selection
+cv_lasso <- cv.glmnet(X_train_balanced, y_train_numeric, family = "binomial", 
+                      alpha = 1, nfolds = 5, type.measure = "auc")
+
+# Train final model
+logistic_model <- glmnet(X_train_balanced, y_train_numeric, family = "binomial", 
+                        alpha = 1, lambda = cv_lasso$lambda.1se)
+
+# Predictions
+logistic_prob <- predict(logistic_model, X_test, type = "response", s = cv_lasso$lambda.1se)
+logistic_pred <- ifelse(logistic_prob > 0.5, "Injured", "Not_Injured")
+logistic_pred <- factor(logistic_pred, levels = c("Not_Injured", "Injured"))
+
+# Performance metrics
+logistic_cm <- confusionMatrix(logistic_pred, y_test, positive = "Injured")
+logistic_auc <- roc(y_test_numeric, as.numeric(logistic_prob))$auc
+
+cat("Logistic Regression Results:\n")
+print(logistic_cm)
+cat("AUC:", round(logistic_auc, 4), "\n")
+
+# Feature importance
+logistic_coef <- coef(logistic_model, s = cv_lasso$lambda.1se)
+logistic_importance <- data.frame(
+  feature = rownames(logistic_coef)[-1],  # Exclude intercept
+  coefficient = as.numeric(logistic_coef[-1]),
+  abs_coefficient = abs(as.numeric(logistic_coef[-1]))
+) %>%
+  arrange(desc(abs_coefficient)) %>%
+  head(15)
+
+cat("\nTop 15 Logistic Regression Features:\n")
+print(logistic_importance)
+
+# === MODEL 2: RANDOM FOREST ===
+cat("\n=== Training Random Forest ===\n")
+
+set.seed(123)
+
+# Convert to factor for randomForest
+train_rf_data <- data.frame(X_train_balanced)
+train_rf_data$injury_target <- y_train_balanced
+
+test_rf_data <- data.frame(X_test)
+test_rf_data$injury_target <- y_test
+
+# Tune Random Forest parameters
+rf_grid <- expand.grid(
+  mtry = c(sqrt(ncol(X_train_balanced)), ncol(X_train_balanced)/3, ncol(X_train_balanced)/2)
+)
+
+# Use caret for tuning
+rf_control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  verboseIter = FALSE
+)
+
+# Train Random Forest
+rf_model <- train(
+  injury_target ~ .,
+  data = train_rf_data,
+  method = "rf",
+  tuneGrid = rf_grid,
+  trControl = rf_control,
+  metric = "ROC",
+  ntree = 500,
+  importance = TRUE
+)
+
+# Predictions
+rf_prob <- predict(rf_model, test_rf_data, type = "prob")[,"Injured"]
+rf_pred <- predict(rf_model, test_rf_data)
+
+# Performance metrics
+rf_cm <- confusionMatrix(rf_pred, y_test, positive = "Injured")
+rf_auc <- roc(y_test_numeric, rf_prob)$auc
+
+cat("Random Forest Results:\n")
+print(rf_cm)
+cat("AUC:", round(rf_auc, 4), "\n")
+cat("Best mtry:", rf_model$bestTune$mtry, "\n")
+
+# Feature importance
+rf_importance <- varImp(rf_model)$importance %>%
+  rownames_to_column("feature") %>%
+  arrange(desc(Injured)) %>%
+  head(15)
+
+cat("\nTop 15 Random Forest Features:\n")
+print(rf_importance)
+
+# === MODEL 3: XGBOOST ===
+cat("\n=== Training XGBoost ===\n")
+
+set.seed(123)
+
+# Prepare data for XGBoost
+dtrain <- xgb.DMatrix(data = X_train_balanced, label = y_train_numeric)
+dtest <- xgb.DMatrix(data = X_test, label = y_test_numeric)
+
+# XGBoost parameters
+xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  eta = 0.1,
+  max_depth = 6,
+  min_child_weight = 1,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  seed = 123
+)
+
+# Cross-validation to find optimal rounds
+xgb_cv <- xgb.cv(
+  params = xgb_params,
+  data = dtrain,
+  nrounds = 1000,
+  nfold = 5,
+  showsd = TRUE,
+  stratified = TRUE,
+  print_every_n = 100,
+  early_stopping_rounds = 50,
+  maximize = TRUE
+)
+
+# Train final model
+best_nrounds <- xgb_cv$best_iteration
+xgb_model <- xgb.train(
+  params = xgb_params,
+  data = dtrain,
+  nrounds = best_nrounds,
+  watchlist = list(train = dtrain, test = dtest),
+  print_every_n = 100,
+  early_stopping_rounds = 50,
+  maximize = TRUE
+)
+
+# Predictions
+xgb_prob <- predict(xgb_model, dtest)
+xgb_pred <- ifelse(xgb_prob > 0.5, "Injured", "Not_Injured")
+xgb_pred <- factor(xgb_pred, levels = c("Not_Injured", "Injured"))
+
+# Performance metrics
+xgb_cm <- confusionMatrix(xgb_pred, y_test, positive = "Injured")
+xgb_auc <- roc(y_test_numeric, xgb_prob)$auc
+
+cat("XGBoost Results:\n")
+print(xgb_cm)
+cat("AUC:", round(xgb_auc, 4), "\n")
+cat("Best rounds:", best_nrounds, "\n")
+
+# Feature importance
+xgb_importance <- xgb.importance(
+  feature_names = colnames(X_train_balanced),
+  model = xgb_model
+) %>%
+  head(15)
+
+cat("\nTop 15 XGBoost Features:\n")
+print(xgb_importance)
+
+# === MODEL COMPARISON ===
+cat("\n=== Model Comparison ===\n")
+# === FIXED MODEL COMPARISON ===
+cat("\n=== Model Comparison (Fixed) ===\n")
+
+# Compile results with proper handling of character and numeric columns
+model_results <- data.frame(
+  Model = c("Logistic Regression", "Random Forest", "XGBoost"),
+  Accuracy = c(
+    as.numeric(logistic_cm$overall["Accuracy"]),
+    as.numeric(rf_cm$overall["Accuracy"]),
+    as.numeric(xgb_cm$overall["Accuracy"])
+  ),
+  Sensitivity = c(
+    as.numeric(logistic_cm$byClass["Sensitivity"]),
+    as.numeric(rf_cm$byClass["Sensitivity"]),
+    as.numeric(xgb_cm$byClass["Sensitivity"])
+  ),
+  Specificity = c(
+    as.numeric(logistic_cm$byClass["Specificity"]),
+    as.numeric(rf_cm$byClass["Specificity"]),
+    as.numeric(xgb_cm$byClass["Specificity"])
+  ),
+  Precision = c(
+    as.numeric(logistic_cm$byClass["Pos Pred Value"]),
+    as.numeric(rf_cm$byClass["Pos Pred Value"]),
+    as.numeric(xgb_cm$byClass["Pos Pred Value"])
+  ),
+  F1_Score = c(
+    as.numeric(logistic_cm$byClass["F1"]),
+    as.numeric(rf_cm$byClass["F1"]),
+    as.numeric(xgb_cm$byClass["F1"])
+  ),
+  AUC = c(
+    as.numeric(logistic_auc), 
+    as.numeric(rf_auc), 
+    as.numeric(xgb_auc)
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Handle NA values
+model_results[is.na(model_results)] <- 0
+
+# Print results with proper formatting
+cat("=== Model Performance Comparison ===\n")
+cat(sprintf("%-20s %8s %11s %11s %9s %8s %6s\n", 
+            "Model", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1_Score", "AUC"))
+cat(paste(rep("-", 80), collapse = ""), "\n")
+
+for(i in 1:nrow(model_results)) {
+  cat(sprintf("%-20s %8.4f %11.4f %11.4f %9.4f %8.4f %6.4f\n",
+              model_results$Model[i],
+              model_results$Accuracy[i],
+              model_results$Sensitivity[i],
+              model_results$Specificity[i],
+              model_results$Precision[i],
+              model_results$F1_Score[i],
+              model_results$AUC[i]))
+}
+
+# Alternative: Create separate display for numeric results
+numeric_results <- model_results[, -1]  # Exclude Model column
+rownames(numeric_results) <- model_results$Model
+
+cat("\n=== Numeric Results Only ===\n")
+print(round(numeric_results, 4))
+
+# === ENHANCED VISUALIZATION ===
+cat("\n=== Creating Performance Visualizations ===\n")
+
+# Convert to long format for plotting
+model_results_long <- model_results %>%
+  pivot_longer(cols = -Model, names_to = "Metric", values_to = "Value") %>%
+  mutate(Value = as.numeric(Value))
+
+# Performance comparison plot
+performance_plot <- ggplot(model_results_long, aes(x = Model, y = Value, fill = Model)) +
+  geom_col() +
+  facet_wrap(~Metric, scales = "free_y") +
+  scale_fill_viridis_d() +
+  labs(title = "Model Performance Comparison", 
+       subtitle = "NBA Injury Prediction Models",
+       x = "Model", y = "Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+print(performance_plot)
+
+# AUC comparison bar plot
+auc_plot <- ggplot(model_results, aes(x = reorder(Model, AUC), y = AUC, fill = Model)) +
+  geom_col() +
+  geom_text(aes(label = round(AUC, 3)), vjust = -0.3) +
+  scale_fill_viridis_d() +
+  labs(title = "Model AUC Comparison", 
+       subtitle = "NBA Injury Prediction",
+       x = "Model", y = "AUC Score") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  ylim(0, 1)
+
+print(auc_plot)
+
+# === ROBUST ERROR HANDLING FOR ROC CURVES ===
+cat("\n=== ROC Curve Analysis (Enhanced) ===\n")
+
+# Create ROC objects with error handling
+tryCatch({
+  roc_logistic <- roc(as.numeric(y_test == "Injured"), as.numeric(logistic_prob))
+  roc_rf <- roc(as.numeric(y_test == "Injured"), rf_prob)
+  roc_xgb <- roc(as.numeric(y_test == "Injured"), xgb_prob)
+  
+  # Enhanced ROC plot using ggplot
+  roc_data <- data.frame(
+    FPR = c(1 - roc_logistic$specificities, 1 - roc_rf$specificities, 1 - roc_xgb$specificities),
+    TPR = c(roc_logistic$sensitivities, roc_rf$sensitivities, roc_xgb$sensitivities),
+    Model = c(rep("Logistic Regression", length(roc_logistic$specificities)),
+              rep("Random Forest", length(roc_rf$specificities)),
+              rep("XGBoost", length(roc_xgb$specificities)))
+  )
+  
+  roc_plot <- ggplot(roc_data, aes(x = FPR, y = TPR, color = Model)) +
+    geom_line(size = 1.2) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+    scale_color_viridis_d() +
+    labs(title = "ROC Curve Comparison",
+         subtitle = paste("AUC: Logistic =", round(roc_logistic$auc, 3),
+                          ", RF =", round(roc_rf$auc, 3),
+                          ", XGBoost =", round(roc_xgb$auc, 3)),
+         x = "False Positive Rate (1 - Specificity)",
+         y = "True Positive Rate (Sensitivity)") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  print(roc_plot)
+  
+}, error = function(e) {
+  cat("Error creating ROC curves:", e$message, "\n")
+  cat("Using basic plotting instead...\n")
+  
+  # Fallback to basic plot
+  plot(1-roc_logistic$specificities, roc_logistic$sensitivities, 
+       type = "l", col = "red", lwd = 2,
+       xlab = "False Positive Rate", ylab = "True Positive Rate",
+       main = "ROC Curves Comparison")
+  lines(1-roc_rf$specificities, roc_rf$sensitivities, col = "blue", lwd = 2)
+  lines(1-roc_xgb$specificities, roc_xgb$sensitivities, col = "green", lwd = 2)
+  abline(0, 1, lty = 2, col = "gray")
+  legend("bottomright", 
+         legend = c(paste("Logistic (AUC =", round(roc_logistic$auc, 3), ")"),
+                    paste("Random Forest (AUC =", round(roc_rf$auc, 3), ")"),
+                    paste("XGBoost (AUC =", round(roc_xgb$auc, 3), ")")),
+         col = c("red", "blue", "green"), lty = 1, lwd = 2)
+})
+
+# === PREDICTION ANALYSIS WITH ERROR HANDLING ===
+cat("\n=== Prediction Analysis ===\n")
+
+# Create prediction comparison with proper error handling
+tryCatch({
+  pred_comparison <- data.frame(
+    Player = test_data$PLAYER_NAME,
+    Season = test_data$SEASON,
+    Actual = as.character(y_test),
+    Logistic_Prob = as.numeric(logistic_prob),
+    RF_Prob = as.numeric(rf_prob),
+    XGB_Prob = as.numeric(xgb_prob),
+    Age = test_data$AGE,
+    stringsAsFactors = FALSE
+  )
+  
+  # Add average probability
+  pred_comparison$Avg_Prob <- (pred_comparison$Logistic_Prob + 
+                              pred_comparison$RF_Prob + 
+                              pred_comparison$XGB_Prob) / 3
+  
+  # High-risk predictions
+  high_risk_players <- pred_comparison %>%
+    filter(Avg_Prob > 0.6) %>%  # Lowered threshold for more results
+    arrange(desc(Avg_Prob))
+  
+  cat("High-risk players identified (avg probability > 0.6):\n")
+  if(nrow(high_risk_players) > 0) {
+    print(head(high_risk_players[, c("Player", "Season", "Age", "Actual", "Avg_Prob")], 10))
+  } else {
+    cat("No players found with average probability > 0.6\n")
+    cat("Top 10 highest risk players:\n")
+    top_risk <- pred_comparison %>%
+      arrange(desc(Avg_Prob)) %>%
+      head(10)
+    print(top_risk[, c("Player", "Season", "Age", "Actual", "Avg_Prob")])
+  }
+  
+  # Prediction distribution plot
+  prob_dist_plot <- ggplot(pred_comparison, aes(x = Avg_Prob, fill = Actual)) +
+    geom_histogram(alpha = 0.7, bins = 30, position = "identity") +
+    scale_fill_viridis_d() +
+    labs(title = "Distribution of Injury Probabilities",
+         subtitle = "Average across all three models",
+         x = "Average Predicted Probability", y = "Count") +
+    theme_minimal()
+  
+  print(prob_dist_plot)
+  
+}, error = function(e) {
+  cat("Error in prediction analysis:", e$message, "\n")
+})
+
+# === MODEL SUMMARY WITH RECOMMENDATIONS ===
+cat("\n=== FINAL MODEL SUMMARY ===\n")
+
+# Find best model
+best_model_idx <- which.max(model_results$AUC)
+best_model <- model_results$Model[best_model_idx]
+best_auc <- model_results$AUC[best_model_idx]
+
+
+cat("NBA INJURY PREDICTION MODEL RESULTS\n")
+
+cat("\nBEST PERFORMING MODEL:", best_model, "\n")
+cat("AUC Score:", round(best_auc, 4), "\n")
+cat("Total features used:", length(feature_columns), "\n")
+cat("Training samples:", nrow(train_data), "\n")
+cat("Test samples:", nrow(test_data), "\n")
+
+if(exists("high_risk_players") && nrow(high_risk_players) > 0) {
+  cat("High-risk players identified:", nrow(high_risk_players), "\n")
+}
+
+
+# === SAVE RESULTS (FIXED) ===
+cat("\n=== Saving Results ===\n")
+
+# Save with error handling
+#tryCatch({
+  #write.csv(model_results, "nba_supervised_model_performance.csv", row.names = FALSE)
+  #cat("✓ Model performance saved\n")
+#}, error = function(e) cat("✗ Error saving model performance:", e$message, "\n"))
+
+#tryCatch({
+  #if(exists("pred_comparison")) {
+   # write.csv(pred_comparison, "nba_injury_predictions.csv", row.names = FALSE)
+    #cat("✓ Predictions saved\n")
+  #}
+#}, error = function(e) cat("✗ Error saving predictions:", e$message, "\n"))
+
+#tryCatch({
+#  if(exists("high_risk_players") && nrow(high_risk_players) > 0) {
+#    #write.csv(high_risk_players, "nba_high_risk_players.csv", row.names = FALSE)
+#    cat("✓ High-risk players saved\n")
+# }
+#}, error = function(e) cat("✗ Error saving high-risk players:", e$message, "\n"))
+```
+
+# Save model performance
+write.csv(model_results, "nba_supervised_model_performance.csv", row.names = FALSE)
+write.csv(cv_summary, "nba_supervised_cv_results.csv", row.names = FALSE)
+
+# Save predictions
+write.csv(pred_comparison, "nba_injury_predictions.csv", row.names = FALSE)
+write.csv(high_risk_players, "nba_high_risk_players.csv", row.names = FALSE)
+
+# Save feature importance
+write.csv(xgb_importance, "nba_xgboost_feature_importance.csv", row.names = FALSE)
+write.csv(rf_importance, "nba_rf_feature_importance.csv", row.names = FALSE)
+write.csv(logistic_importance, "nba_logistic_feature_importance.csv", row.names = FALSE)
+
+# Save models
+save(logistic_model, rf_model, xgb_model, cv_lasso, 
+     file = "nba_supervised_models.RData")
+
+cat("Analysis complete!\n")
+cat("Files saved:\n")
+cat("- nba_supervised_model_performance.csv\n")
+cat("- nba_supervised_cv_results.csv\n")
+cat("- nba_injury_predictions.csv\n")
+cat("- nba_high_risk_players.csv\n")
+cat("- Feature importance files (3 models)\n")
+cat("- nba_supervised_models.RData\n")
+
+
+
