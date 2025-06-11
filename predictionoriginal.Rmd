@@ -7,47 +7,58 @@ date: "2025-06-02"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(tidyverse)    # For data manipulation and visualization
-library(lubridate)    # For date handling
-library(plotly)       # For interactive plots
-library(corrplot)     # For correlation plots
-library(skimr)        # For data summary
-library(GGally)       # For pair plots
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(corrplot)
+library(skimr)
+library(GGally)
 library(scales)
 library(dplyr)
 library(ggplot2)
 library(readr)
 library(stringr)
 library(DT)
-```
-
-
-```{r cars}
-# NBA Comprehensive Injury Analysis - Complete EDA with Location Details
-# Updated: 2025-06-06
-# Author: ol0w0lo
-
-# --- SETUP AND LIBRARIES ---
-library(tidyverse)
-library(lubridate)
-library(skimr)
-library(corrplot)
-library(scales)
 library(ggrepel)
 library(tidytext)
 library(forcats)
-library(dplyr)
 library(gridExtra)
+library(cluster)
+library(factoextra)
+library(NbClust)
+library(pheatmap)
+library(VIM)
+library(mice)
+library(umap)
+library(dbscan)
+library(kohonen)
+library(caret)
+library(xgboost)
+library(randomForest)
+library(glmnet)
+library(pROC)
+library(ROSE)
+library(MLmetrics)
+library(lime)
+library(DALEX)
+library(e1071)
+library(ROCR)
+set.seed(123)
+
+#bios <- read_csv("~/Downloads/nba_bios_2013-2023.csv")
+#run <- read_csv("~/Downloads/running distance nba.csv")
+#all_injury <- read_csv("~/Downloads/NBA Player Injury Stats(1951 - 2023).csv")
+
+run <- read_csv("C:/Users/11578/Desktop/running distance nba.csv")
+bios <- read_csv("C:/Users/11578/Desktop/nba_bios_2013-2023.csv")
+all_injury <- read.csv("C:/Users/11578/Desktop/NBA Player Injury Stats(1951 - 2023).csv", stringsAsFactors = FALSE)
 ```
 
 
 
 ```{r}
 
-#bios <- read_csv("~/Downloads/nba_bios_2013-2023.csv")
-run <- read_csv("C:/Users/11578/Desktop/running distance nba.csv")
-bios <- read_csv("C:/Users/11578/Desktop/nba_bios_2013-2023.csv")
-all_injury <- read.csv("C:/Users/11578/Desktop/NBA Player Injury Stats(1951 - 2023).csv", stringsAsFactors = FALSE)
+
 # Basic dataset overview
 cat("=== NBA Player Bios Analysis ===\n")
 cat("Dataset shape:", nrow(bios), "rows x", ncol(bios), "columns\n")
@@ -73,8 +84,6 @@ head(bios)
 Teams often put players on IL without them getting injure because it gives the players more time to rest. so in the following code it will exclude the players on 
 
 ```{r}
-# Load and clean injury data
-#all_injury <- read_csv("~/Downloads/NBA Player Injury Stats(1951 - 2023).csv")
 
 injury <- all_injury %>%
   mutate(
@@ -169,7 +178,7 @@ cat("Injury rate:", round(injury_status$injury_rate, 2), "%\n")
 
 
 ```{r}
-#run <- read_csv("~/Downloads/running distance nba.csv")
+
 
 
 run <- run %>%
@@ -311,23 +320,7 @@ str(merged)
 
 ```{r}
 # NBA Injury Analysis - Unsupervised Machine Learning Models
-# Updated for actual data structure
-# Author: ol0w0lo
-# Date: 2025-06-10
 
-# Load additional libraries for unsupervised learning
-library(cluster)        # For clustering algorithms
-library(factoextra)     # For cluster visualization
-library(NbClust)        # For optimal cluster number determination
-library(pheatmap)       # For heatmaps
-library(VIM)            # For missing value visualization
-library(mice)           # For missing value imputation
-library(umap)           # For UMAP dimensionality reduction
-library(dbscan)         # For DBSCAN clustering
-library(kohonen)        # For Self-Organizing Maps
-library(corrplot)       # For correlation analysis
-library(plotly)         # For interactive plots
-library(gridExtra)      # For arranging plots
 
 # === DATA PREPARATION ===
 cat("=== Starting Unsupervised ML Analysis ===\n")
@@ -915,24 +908,8 @@ Silhouette Method for Optimal k
 
 
 # Load required libraries
-library(tidyverse)
-library(caret)           # For model training and evaluation
-library(xgboost)         # For XGBoost
-library(randomForest)    # For Random Forest
-library(glmnet)          # For regularized logistic regression
-library(pROC)            # For ROC curves
-library(VIM)             # For missing value analysis
-library(corrplot)        # For correlation plots
-library(ROSE)            # For handling class imbalance
-library(MLmetrics)       # For additional metrics
-library(plotly)          # For interactive plots
-library(lime)            # For model interpretability
-library(DALEX)           # For model explanation
-library(gridExtra)       # For plot arrangements
-library(e1071)           # For SVM (optional)
-library(ROCR)            # For performance evaluation
-```
-```{r}
+          # For performance evaluation
+
 # === DATA PREPARATION FOR SUPERVISED LEARNING ===
 
 # Prepare the dataset
@@ -1095,8 +1072,6 @@ if(imbalance_ratio < 0.3) {
 # === MODEL 1: LOGISTIC REGRESSION ===
 cat("\n=== Training Logistic Regression ===\n")
 
-# Train logistic regression with regularization
-set.seed(123)
 
 # Prepare data for glmnet (requires numeric target)
 y_train_numeric <- as.numeric(y_train_balanced == "Injured")
