@@ -1,0 +1,633 @@
+---
+title: "nba injury"
+output: pdf_document
+date: "2025-06-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)    # For data manipulation and visualization
+library(lubridate)    # For date handling
+library(plotly)       # For interactive plots
+library(corrplot)     # For correlation plots
+library(skimr)        # For data summary
+library(GGally)       # For pair plots
+library(scales) 
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+# R Script for Exploratory Data Analysis of NBA Player Injury Stats
+# Updated with better understanding of Acquired vs Relinquished columns
+# Acquired = Player returning from injury
+# Relinquished = Player placed on IL due to injury
+
+# --- 1. SETUP ---
+# Install packages if you haven't already
+# install.packages(c("tidyverse", "lubridate", "skimr", "corrplot", "scales", "gridExtra", "ggrepel", "tidytext"))
+
+library(tidyverse)
+library(lubridate)
+library(skimr)
+library(corrplot)
+library(scales)
+library(gridExtra)
+library(ggrepel)
+library(tidytext)
+
+# --- A. SET FILE PATH AND NAME ---
+# Path to your Desktop folder
+path <- "C:/Users/11578/Desktop"
+# path <- "~/Desktop" # For macOS/Linux - comment out if on Windows
+
+cat("Attempting to set working directory to:", path, "\n")
+tryCatch({
+  setwd(path)
+  cat("Successfully set working directory to:", getwd(), "\n")
+}, error = function(e) {
+  cat("Error setting working directory to:", path, "\n")
+  cat("Please ensure this path is correct for your system.\n")
+  cat("Current working directory is still:", getwd(), "\n")
+  stop("Could not set working directory. Script halted.", call. = FALSE)
+})
+
+# Define the CSV file name
+oldinjury <- "NBA Player Injury Stats(1951 - 2023).csv"
+full_file_path_check <- file.path(path, oldinjury)
+
+cat("Looking for file:", oldinjury, "in directory:", getwd(), "\n")
+cat("Full path check (for info):", full_file_path_check, "\n")
+
+# List files for debugging
+cat("\nFiles found directly in your working directory:\n")
+current_dir_files <- list.files()
+if (length(current_dir_files) > 0) {
+  print(current_dir_files)
+} else {
+  cat("No files found directly in this directory.\n")
+}
+cat("\nIs '", oldinjury, "' in the list above? Please check carefully.\n\n", sep="")
+
+# --- 2. LOAD DATA ---
+nba_data_raw <- NULL
+
+if (!file.exists(oldinjury)) {
+  cat("Error: The file '", oldinjury, "' was NOT found in the current directory: '", getwd(), "'.\n", sep="")
+  stop("File not found. Script halted.", call. = FALSE)
+}
+
+cat("File '", oldinjury, "' found. Attempting to load...\n", sep="")
+tryCatch({
+  nba_data_raw <- read.csv(oldinjury,
+                           stringsAsFactors = FALSE,
+                           na.strings = c("", "NA", "N/A", "null", "NULL", "NaN"))
+  cat("Data loaded successfully into 'nba_data_raw'.\n\n")
+}, error = function(e) {
+  cat("Error during read.csv for file '", oldinjury, "':\n", sep="")
+  print(e)
+  stop("Failed to read the CSV file. Script halted.", call. = FALSE)
+})
+
+# --- 3. INITIAL DATA INSPECTION ---
+cat("--- INITIAL DATA INSPECTION ---\n")
+cat("Dimensions of the dataset (rows, columns):", dim(nba_data_raw)[1], ",", dim(nba_data_raw)[2], "\n")
+cat("First few rows of the dataset:\n")
+print(head(nba_data_raw, 10))
+
+# Check if an 'X' column exists and remove it
+if ("X" %in% colnames(nba_data_raw)) {
+  cat("Removing index column 'X'.\n")
+  nba_data <- select(nba_data_raw, -X)
+} else {
+  nba_data <- nba_data_raw
+}
+
+cat("Column names:\n")
+print(colnames(nba_data))
+cat("\nSummary statistics:\n")
+skim(nba_data)
+
+# --- 4. DATA CLEANING AND PREPARATION ---
+cat("\n--- DATA CLEANING AND PREPARATION ---\n")
+
+# Define column names
+date_col <- "Date"
+team_col <- "Team"
+acquired_col <- "Acquired"      # Players returning from injury
+relinquished_col <- "Relinquished"  # Players placed on IL
+notes_col <- "Notes"
+
+# Create separate analysis columns
+nba_data <- nba_data %>%
+  mutate(
+    # Event type based on which column has data
+    EventType = case_when(
+      !is.na(.data[[acquired_col]]) & .data[[acquired_col]] != "" ~ "Return from Injury",
+      !is.na(.data[[relinquished_col]]) & .data[[relinquished_col]] != "" ~ "Placed on IL",
+      TRUE ~ "Unknown"
+    ),
+    # Player name from whichever column has data
+    Player = case_when(
+      !is.na(.data[[acquired_col]]) & .data[[acquired_col]] != "" ~ .data[[acquired_col]],
+      !is.na(.data[[relinquished_col]]) & .data[[relinquished_col]] != "" ~ .data[[relinquished_col]],
+      TRUE ~ NA_character_
+    ),
+    # Flag for injury vs recovery
+    IsInjury = EventType == "Placed on IL",
+    IsRecovery = EventType == "Return from Injury"
+  )
+
+cat("Sample of created columns:\n")
+print(head(select(nba_data, !!sym(acquired_col), !!sym(relinquished_col), Player, EventType, IsInjury, IsRecovery)))
+
+# Convert Date column
+if (date_col %in% colnames(nba_data)) {
+  cat("Converting Date column...\n")
+  nba_data[[date_col]] <- ymd(nba_data[[date_col]], quiet = TRUE)
+  
+  nba_data$Year <- year(nba_data[[date_col]])
+  nba_data$Month <- month(nba_data[[date_col]], label = TRUE, abbr = FALSE)
+  nba_data$Weekday <- wday(nba_data[[date_col]], label = TRUE, abbr = FALSE)
+  nba_data$Season <- ifelse(month(nba_data[[date_col]]) >= 10, 
+                           nba_data$Year, 
+                           nba_data$Year - 1) # NBA season spans two calendar years
+  cat("Date column converted. Extracted Year, Month, Weekday, Season.\n")
+}
+
+# Missing value analysis
+cat("\nMissing values analysis:\n")
+missing_values <- colSums(is.na(nba_data))
+missing_summary <- data.frame(
+  Column = names(missing_values),
+  MissingCount = missing_values,
+  MissingPercentage = round((missing_values / nrow(nba_data)) * 100, 2)
+) %>%
+  filter(MissingCount > 0) %>%
+  arrange(desc(MissingPercentage))
+
+print(missing_summary)
+
+# --- 5. EXPLORATORY DATA ANALYSIS ---
+cat("\n--- EXPLORATORY DATA ANALYSIS ---\n")
+
+# A. Overall Event Type Distribution
+cat("A. Event Type Distribution:\n")
+event_summary <- nba_data %>%
+  count(EventType, sort = TRUE) %>%
+  mutate(Percentage = round(n / sum(n) * 100, 1))
+
+print(event_summary)
+
+p_event_types <- ggplot(event_summary, aes(x = reorder(EventType, n), y = n, fill = EventType)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Distribution of Event Types",
+       subtitle = "Injuries (Placed on IL) vs Returns (Acquired)",
+       x = "Event Type", y = "Count") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Placed on IL" = "red", "Return from Injury" = "green", "Unknown" = "gray")) +
+  geom_text(aes(label = paste0(n, " (", Percentage, "%)")), hjust = -0.1)
+print(p_event_types)
+
+# B. Injury and Recovery Trends Over Time
+if ("Year" %in% colnames(nba_data)) {
+  cat("\nB. Analyzing injury and recovery trends over years...\n")
+  
+  yearly_trends <- nba_data %>%
+    filter(!is.na(Year) & EventType != "Unknown") %>%
+    group_by(Year, EventType) %>%
+    summarise(Count = n(), .groups = 'drop') %>%
+    filter(Year >= 1951 & Year <= 2023)
+
+  p_yearly_trends <- ggplot(yearly_trends, aes(x = Year, y = Count, color = EventType)) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.5) +
+    labs(title = "NBA Injuries vs Returns Over Time (1951-2023)",
+         subtitle = "Red = Players placed on IL, Blue = Players returning from IL",
+         x = "Year", y = "Number of Events") +
+    theme_minimal() +
+    scale_color_manual(values = c("Placed on IL" = "red", "Return from Injury" = "blue")) +
+    scale_x_continuous(breaks = seq(1950, 2025, 5))
+  print(p_yearly_trends)
+  
+  # Net injury rate (injuries - recoveries)
+  net_injury_trend <- yearly_trends %>%
+    pivot_wider(names_from = EventType, values_from = Count, values_fill = 0) %>%
+    mutate(NetInjuries = `Placed on IL` - `Return from Injury`)
+  
+  p_net_injuries <- ggplot(net_injury_trend, aes(x = Year, y = NetInjuries)) +
+    geom_line(color = "purple", linewidth = 1) +
+    geom_point(color = "purple", size = 1.5) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+    labs(title = "Net Injury Trend Over Time",
+         subtitle = "Positive = More injuries than returns, Negative = More returns than injuries",
+         x = "Year", y = "Net Injuries (Injuries - Returns)") +
+    theme_minimal()
+  print(p_net_injuries)
+}
+
+# C. Most Injury-Prone Players
+cat("\nC. Analyzing players with most injuries...\n")
+injury_prone_players <- nba_data %>%
+  filter(IsInjury & !is.na(Player)) %>%
+  count(Player, sort = TRUE) %>%
+  top_n(20, n)
+
+p_injury_prone <- ggplot(injury_prone_players, aes(x = reorder(Player, n), y = n)) +
+  geom_bar(stat = "identity", fill = "red", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Top 20 Most Injury-Prone Players",
+       subtitle = "Based on number of times placed on IL",
+       x = "Player", y = "Number of Injuries") +
+  theme_minimal() +
+  geom_text(aes(label = n), hjust = -0.1, size = 3)
+print(p_injury_prone)
+
+# D. Teams with Most Injuries
+cat("\nD. Analyzing teams with most injuries...\n")
+team_injuries <- nba_data %>%
+  filter(IsInjury & !is.na(.data[[team_col]])) %>%
+  count(.data[[team_col]], sort = TRUE) %>%
+  top_n(25, n) %>%
+  rename(TeamName = .data[[team_col]], InjuryCount = n)
+
+p_team_injuries <- ggplot(team_injuries, aes(x = reorder(TeamName, InjuryCount), y = InjuryCount)) +
+  geom_bar(stat = "identity", fill = "orange", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Teams with Most Player Injuries",
+       subtitle = "Total number of players placed on IL",
+       x = "Team", y = "Number of Injuries") +
+  theme_minimal() +
+  geom_text(aes(label = InjuryCount), hjust = -0.1, size = 3)
+print(p_team_injuries)
+
+# E. Seasonal Patterns
+if ("Month" %in% colnames(nba_data)) {
+  cat("\nE. Analyzing seasonal injury patterns...\n")
+  
+  monthly_injuries <- nba_data %>%
+    filter(IsInjury & !is.na(Month)) %>%
+    group_by(Month) %>%
+    summarise(InjuryCount = n(), .groups = 'drop')
+
+  p_monthly_injuries <- ggplot(monthly_injuries, aes(x = Month, y = InjuryCount, group = 1)) +
+    geom_line(color = "red", linewidth = 1) +
+    geom_point(color = "red", size = 3) +
+    labs(title = "NBA Injuries by Month",
+         subtitle = "When do most injuries occur during the year?",
+         x = "Month", y = "Number of Injuries") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(p_monthly_injuries)
+}
+
+# F. Injury Type Analysis from Notes
+if (notes_col %in% colnames(nba_data)) {
+  cat("\nF. Analyzing injury types from notes...\n")
+  
+  injury_notes_analysis <- nba_data %>%
+    filter(IsInjury & !is.na(.data[[notes_col]]) & .data[[notes_col]] != "") %>%
+    mutate(NotesLower = str_to_lower(.data[[notes_col]])) %>%
+    mutate(InjuryCategory = case_when(
+      str_detect(NotesLower, "knee") ~ "Knee",
+      str_detect(NotesLower, "ankle") ~ "Ankle", 
+      str_detect(NotesLower, "back|spine") ~ "Back/Spine",
+      str_detect(NotesLower, "shoulder") ~ "Shoulder",
+      str_detect(NotesLower, "hamstring") ~ "Hamstring",
+      str_detect(NotesLower, "foot|toe") ~ "Foot/Toe",
+      str_detect(NotesLower, "hand|wrist|finger") ~ "Hand/Wrist",
+      str_detect(NotesLower, "hip|groin") ~ "Hip/Groin",
+      str_detect(NotesLower, "leg|calf|thigh") ~ "Leg",
+      str_detect(NotesLower, "head|concussion") ~ "Head/Concussion",
+      str_detect(NotesLower, "illness|flu|sick") ~ "Illness",
+      str_detect(NotesLower, "torn|tear") ~ "Muscle/Ligament Tear",
+      str_detect(NotesLower, "strain|pull") ~ "Strain/Pull",
+      str_detect(NotesLower, "fracture|break|broken") ~ "Fracture",
+      TRUE ~ "General/Other"
+    )) %>%
+    count(InjuryCategory, sort = TRUE) %>%
+    top_n(15, n)
+
+  p_injury_types <- ggplot(injury_notes_analysis, aes(x = reorder(InjuryCategory, n), y = n)) +
+    geom_bar(stat = "identity", fill = "darkred", alpha = 0.8) +
+    coord_flip() +
+    labs(title = "Most Common Injury Types",
+         subtitle = "Based on analysis of injury notes",
+         x = "Injury Type", y = "Frequency") +
+    theme_minimal() +
+    geom_text(aes(label = n), hjust = -0.1, size = 3)
+  print(p_injury_types)
+}
+
+# G. Recovery Analysis
+cat("\nG. Recovery analysis - players who returned from injuries...\n")
+recovery_players <- nba_data %>%
+  filter(IsRecovery & !is.na(Player)) %>%
+  count(Player, sort = TRUE) %>%
+  top_n(15, n)
+
+p_recovery <- ggplot(recovery_players, aes(x = reorder(Player, n), y = n)) +
+  geom_bar(stat = "identity", fill = "green", alpha = 0.7) +
+  coord_flip() +
+  labs(title = "Players with Most Returns from Injury",
+       subtitle = "Players who were acquired back most frequently",
+       x = "Player", y = "Number of Returns") +
+  theme_minimal() +
+  geom_text(aes(label = n), hjust = -0.1, size = 3)
+print(p_recovery)
+
+# H. Player Injury-Recovery Balance
+cat("\nH. Player injury vs recovery balance...\n")
+player_balance <- nba_data %>%
+  filter(!is.na(Player) & EventType != "Unknown") %>%
+  group_by(Player, EventType) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = EventType, values_from = Count, values_fill = 0) %>%
+  mutate(
+    TotalEvents = `Placed on IL` + `Return from Injury`,
+    Balance = `Return from Injury` - `Placed on IL`
+  ) %>%
+  filter(TotalEvents >= 3) %>%  # Only players with at least 3 total events
+  arrange(Balance) %>%
+  slice(c(1:10, (n()-9):n()))  # Top and bottom 10
+
+cat("Players with most unbalanced injury/recovery ratios:\n")
+print(player_balance)
+
+# --- 6. Summary Statistics ---
+cat("\n--- SUMMARY STATISTICS ---\n")
+cat("Total events in dataset:", nrow(nba_data), "\n")
+cat("Total injuries (placed on IL):", sum(nba_data$IsInjury, na.rm = TRUE), "\n")
+cat("Total returns (acquired back):", sum(nba_data$IsRecovery, na.rm = TRUE), "\n")
+cat("Unique players affected:", n_distinct(nba_data$Player, na.rm = TRUE), "\n")
+cat("Unique teams involved:", n_distinct(nba_data[[team_col]], na.rm = TRUE), "\n")
+cat("Time period:", min(nba_data$Year, na.rm = TRUE), "-", max(nba_data$Year, na.rm = TRUE), "\n")
+
+# Most active injury years
+if ("Year" %in% colnames(nba_data)) {
+  injury_years <- nba_data %>%
+    filter(IsInjury) %>%
+    count(Year, sort = TRUE) %>%
+    head(5)
+  
+  cat("\nYears with most injuries:\n")
+  print(injury_years)
+}
+
+
+
+
+
+```
+
+
+
+```{r pressure, echo=FALSE}
+# NBA Injury Location Analysis - Specific Body Parts/Locations
+# Excluding general IL placements
+
+# --- SETUP ---
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(forcats)
+
+# Set path and load data
+path <- "C:/Users/11578/Desktop"
+setwd(path)
+oldinjury <- "NBA Player Injury Stats(1951 - 2023).csv"
+
+# Load data
+nba_data <- read.csv(oldinjury, stringsAsFactors = FALSE, na.strings = c("", "NA", "N/A", "null", "NULL", "NaN"))
+
+# Remove X column if it exists
+if ("X" %in% colnames(nba_data)) {
+  nba_data <- select(nba_data, -X)
+}
+
+# Convert date and create injury indicator
+nba_data <- nba_data %>%
+  mutate(
+    Date = ymd(Date),
+    Year = year(Date),
+    IsInjury = !is.na(Relinquished) & Relinquished != "",
+    Player = ifelse(!is.na(Relinquished) & Relinquished != "", Relinquished, Acquired)
+  )
+
+cat("--- SPECIFIC INJURY LOCATION ANALYSIS ---\n")
+cat("Analyzing where NBA players get injured most (excluding general IL)\n\n")
+
+# --- INJURY LOCATION EXTRACTION ---
+# Focus only on injuries with specific location mentions
+specific_injuries <- nba_data %>%
+  filter(IsInjury & !is.na(Notes) & Notes != "") %>%
+  mutate(NotesLower = str_to_lower(Notes)) %>%
+  # Exclude general IL mentions without specific injury details
+  filter(!str_detect(NotesLower, "^(placed on il|placed on inactive list|inactive list)$")) %>%
+  filter(!str_detect(NotesLower, "^(il|gtd|out|day to day)$")) %>%
+  # Create detailed injury location categories
+  mutate(InjuryLocation = case_when(
+    # Lower Body - Leg/Knee
+    str_detect(NotesLower, "\\bknee\\b") ~ "Knee",
+    str_detect(NotesLower, "\\bankle\\b") ~ "Ankle",
+    str_detect(NotesLower, "\\bfoot\\b|\\btoe\\b|\\btoes\\b") ~ "Foot/Toe",
+    str_detect(NotesLower, "\\bhamstring\\b") ~ "Hamstring",
+    str_detect(NotesLower, "\\bcalf\\b|\\bleg\\b|\\bthigh\\b|\\bquad\\b|\\bquadricep\\b") ~ "Leg/Thigh/Calf",
+    str_detect(NotesLower, "\\bhip\\b|\\bgroin\\b|\\bpelvis\\b") ~ "Hip/Groin",
+    str_detect(NotesLower, "\\bachilles\\b") ~ "Achilles",
+    
+    # Upper Body - Arms/Hands
+    str_detect(NotesLower, "\\bshoulder\\b") ~ "Shoulder",
+    str_detect(NotesLower, "\\belbow\\b") ~ "Elbow",
+    str_detect(NotesLower, "\\bwrist\\b") ~ "Wrist",
+    str_detect(NotesLower, "\\bhand\\b|\\bfinger\\b|\\bfingers\\b|\\bthumb\\b") ~ "Hand/Finger",
+    str_detect(NotesLower, "\\barm\\b|\\bforearm\\b") ~ "Arm/Forearm",
+    
+    # Torso
+    str_detect(NotesLower, "\\bback\\b|\\bspine\\b|\\blumbar\\b") ~ "Back/Spine",
+    str_detect(NotesLower, "\\bchest\\b|\\brib\\b|\\bribs\\b|\\btorso\\b") ~ "Chest/Ribs",
+    str_detect(NotesLower, "\\babdomen\\b|\\babdominal\\b|\\bstomach\\b") ~ "Abdomen",
+    str_detect(NotesLower, "\\bneck\\b|\\bcervical\\b") ~ "Neck",
+    
+    # Head
+    str_detect(NotesLower, "\\bhead\\b|\\bconcussion\\b|\\bbrain\\b") ~ "Head/Concussion",
+    str_detect(NotesLower, "\\beye\\b|\\beyes\\b|\\bface\\b|\\bnose\\b|\\bjaw\\b") ~ "Face/Eye",
+    
+    # Internal/General
+    str_detect(NotesLower, "\\bheart\\b|\\bcardiac\\b|\\bchest pain\\b") ~ "Heart/Cardiac",
+    str_detect(NotesLower, "\\billness\\b|\\bflu\\b|\\bsick\\b|\\bfever\\b") ~ "Illness/General",
+    
+    TRUE ~ "Other/Unspecified"
+  )) %>%
+  # Further filter to exclude very general categories
+  filter(InjuryLocation != "Other/Unspecified" & InjuryLocation != "Illness/General")
+
+cat("Total specific injury records found:", nrow(specific_injuries), "\n")
+cat("After excluding general IL and illness:\n\n")
+
+# --- ANALYSIS 1: Most Common Injury Locations ---
+injury_location_counts <- specific_injuries %>%
+  count(InjuryLocation, sort = TRUE) %>%
+  mutate(
+    Percentage = round(n / sum(n) * 100, 1),
+    LocationType = case_when(
+      InjuryLocation %in% c("Knee", "Ankle", "Foot/Toe", "Hamstring", "Leg/Thigh/Calf", "Hip/Groin", "Achilles") ~ "Lower Body",
+      InjuryLocation %in% c("Shoulder", "Elbow", "Wrist", "Hand/Finger", "Arm/Forearm") ~ "Upper Body",
+      InjuryLocation %in% c("Back/Spine", "Chest/Ribs", "Abdomen", "Neck") ~ "Torso",
+      InjuryLocation %in% c("Head/Concussion", "Face/Eye") ~ "Head",
+      TRUE ~ "Other"
+    )
+  )
+
+print(injury_location_counts)
+
+# Plot 1: Most Common Injury Locations
+p1 <- ggplot(injury_location_counts, aes(x = fct_reorder(InjuryLocation, n), y = n, fill = LocationType)) +
+  geom_col(alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Most Common NBA Injury Locations (1951-2023)",
+    subtitle = "Specific body parts/locations only (excluding general IL)",
+    x = "Body Part/Location",
+    y = "Number of Injuries",
+    fill = "Body Region"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c(
+    "Lower Body" = "#FF6B6B",
+    "Upper Body" = "#4ECDC4", 
+    "Torso" = "#45B7D1",
+    "Head" = "#96CEB4",
+    "Other" = "#FFEAA7"
+  )) +
+  geom_text(aes(label = paste0(n, " (", Percentage, "%)")), hjust = -0.1, size = 3)
+
+print(p1)
+
+# --- ANALYSIS 2: Body Region Summary ---
+region_summary <- injury_location_counts %>%
+  group_by(LocationType) %>%
+  summarise(
+    TotalInjuries = sum(n),
+    Percentage = round(sum(n) / sum(injury_location_counts$n) * 100, 1),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(TotalInjuries))
+
+cat("\n--- INJURY BY BODY REGION ---\n")
+print(region_summary)
+
+# Plot 2: Body Region Distribution
+p2 <- ggplot(region_summary, aes(x = fct_reorder(LocationType, TotalInjuries), y = TotalInjuries, fill = LocationType)) +
+  geom_col(alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "NBA Injuries by Body Region",
+    subtitle = "Which parts of the body are most injury-prone?",
+    x = "Body Region",
+    y = "Total Injuries"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c(
+    "Lower Body" = "#FF6B6B",
+    "Upper Body" = "#4ECDC4", 
+    "Torso" = "#45B7D1",
+    "Head" = "#96CEB4",
+    "Other" = "#FFEAA7"
+  )) +
+  geom_text(aes(label = paste0(TotalInjuries, " (", Percentage, "%)")), hjust = -0.1, size = 4) +
+  guides(fill = "none")
+
+print(p2)
+
+# --- ANALYSIS 3: Trends Over Time for Top Injury Locations ---
+if ("Year" %in% colnames(specific_injuries)) {
+  cat("\n--- INJURY LOCATION TRENDS OVER TIME ---\n")
+  
+  # Get top 6 most common injury locations
+  top_locations <- injury_location_counts %>%
+    top_n(6, n) %>%
+    pull(InjuryLocation)
+  
+  location_trends <- specific_injuries %>%
+    filter(InjuryLocation %in% top_locations & !is.na(Year)) %>%
+    filter(Year >= 1980) %>%  # Focus on more recent decades for clearer trends
+    group_by(Year, InjuryLocation) %>%
+    summarise(Count = n(), .groups = 'drop')
+  
+  # Plot 3: Trends over time
+  p3 <- ggplot(location_trends, aes(x = Year, y = Count, color = InjuryLocation)) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.5) +
+    labs(
+      title = "Injury Location Trends Over Time (1980-2023)",
+      subtitle = "Top 6 most common injury locations",
+      x = "Year",
+      y = "Number of Injuries",
+      color = "Injury Location"
+    ) +
+    theme_minimal() +
+    scale_x_continuous(breaks = seq(1980, 2025, 5)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p3)
+}
+
+# --- ANALYSIS 4: Most Injury-Prone Players by Location ---
+cat("\n--- PLAYERS WITH MOST SPECIFIC INJURIES BY LOCATION ---\n")
+
+# Top players for most common injury types
+top_injury_types <- head(injury_location_counts$InjuryLocation, 4)
+
+for (injury_type in top_injury_types) {
+  cat("\n", injury_type, "injuries:\n")
+  
+  players_with_injury <- specific_injuries %>%
+    filter(InjuryLocation == injury_type) %>%
+    count(Player, sort = TRUE) %>%
+    head(5)
+  
+  print(players_with_injury)
+}
+
+# --- ANALYSIS 5: Detailed Breakdown of Most Common Injury ---
+most_common_injury <- injury_location_counts$InjuryLocation[1]
+cat("\n--- DETAILED ANALYSIS OF", toupper(most_common_injury), "INJURIES ---\n")
+
+knee_details <- specific_injuries %>%
+  filter(InjuryLocation == most_common_injury) %>%
+  mutate(SpecificType = case_when(
+    str_detect(NotesLower, "torn|tear") ~ "Tear/Rupture",
+    str_detect(NotesLower, "strain|sprain") ~ "Strain/Sprain", 
+    str_detect(NotesLower, "surgery|surgical") ~ "Surgery Required",
+    str_detect(NotesLower, "bruise|contusion") ~ "Bruise/Contusion",
+    str_detect(NotesLower, "sore|soreness") ~ "Soreness",
+    TRUE ~ "General/Other"
+  )) %>%
+  count(SpecificType, sort = TRUE)
+
+cat("Breakdown of", most_common_injury, "injury types:\n")
+print(knee_details)
+
+# --- SUMMARY ---
+cat("\n--- KEY FINDINGS ---\n")
+cat("1. Most injury-prone body part:", injury_location_counts$InjuryLocation[1], 
+    "(", injury_location_counts$n[1], "injuries,", injury_location_counts$Percentage[1], "%)\n")
+cat("2. Most injury-prone body region:", region_summary$LocationType[1], 
+    "(", region_summary$TotalInjuries[1], "injuries,", region_summary$Percentage[1], "%)\n")
+cat("3. Lower body injuries account for:", 
+    region_summary$Percentage[region_summary$LocationType == "Lower Body"], "% of all specific injuries\n")
+
+# Optional: Save plots
+# ggsave("injury_locations_detailed.png", plot = p1, width = 12, height = 8)
+# ggsave("injury_regions_summary.png", plot = p2, width = 10, height = 6)
+
+cat("\n--- ANALYSIS COMPLETE ---\n")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
